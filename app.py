@@ -1,0 +1,43 @@
+
+import gradio as gr, numpy as np, onnxruntime as ort, json
+from PIL import Image
+
+LABELS = [l.strip() for l in open("labels.txt") if l.strip()]
+CAL = json.load(open("calibration.json"))
+SESSION = ort.InferenceSession(
+    "model.onnx",
+    providers=["CPUExecutionProvider"]
+)
+
+def predict(img):
+    if img is None: return "Upload an image.", {}
+    img = img.convert("RGB").resize((224, 224))
+    x = np.asarray(img).astype("float32") / 255.0
+    x = (x - [0.485, 0.456, 0.406]) / [0.229, 0.224, 0.225]
+    x = x.transpose(2, 0, 1)[None].astype("float32")
+    logits = SESSION.run(None, {"image": x})[0]
+    t = CAL.get("temperature", 1.0)
+    e = np.exp(logits / t); probs = e / e.sum()
+    top = np.argsort(probs[0])[::-1][:3]
+    return (f"Most likely: **{LABELS[top[0]]}** ({probs[0, top[0]]:.0%})",
+            {LABELS[i]: float(probs[0, i]) for i in top})
+
+with gr.Blocks(title="Crop Disease Screening") as demo:
+    gr.Markdown("# 🌿 Crop Disease Screening\nUpload a leaf image.")
+    with gr.Row():
+        img = gr.Image(type="pil", label="Leaf")
+        btn = gr.Button("Analyse", variant="primary")
+    verdict = gr.Markdown()
+    probs = gr.Label(num_top_classes=3, label="Top-3")
+    btn.click(predict, [img], [verdict, probs])
+
+import os
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+
+    demo.launch(
+        server_name="0.0.0.0",
+        server_port=port,
+        share=False
+    )
